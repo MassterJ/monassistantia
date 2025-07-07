@@ -2,99 +2,86 @@ import gradio as gr
 import requests
 import os
 
-# --- CONFIGURATION AMÉLIORÉE ---
+# --- CONFIGURATION ---
+# Récupère la clé API depuis les "Secrets" de la plateforme d'hébergement.
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
-# 1. NOTRE LISTE DE MODÈLES DE SECOURS (du plus désiré au moins désiré)
-# Nous allons essayer ces modèles dans l'ordre jusqu'à en trouver un qui fonctionne.
+# Liste des modèles à essayer, par ordre de préférence.
 MODEL_ENDPOINTS = [
+    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
     "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill",
-    "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-    # On pourrait en ajouter d'autres ici à l'avenir
 ]
 
-# 2. Une variable pour stocker le modèle qui fonctionne actuellement
-active_model_url = ""
-active_model_name = "Indisponible"
+# Variable globale pour stocker l'URL du modèle qui fonctionne.
+active_model_url = None
+# --------------------
 
-# --------------------------------------------------------------------
-
-def find_active_model():
+def find_and_set_active_model():
     """
-    NOUVELLE FONCTION : C'est le "vérificateur d'URL".
-    Il parcourt notre liste et s'arrête au premier modèle qui répond correctement.
-    Cette fonction est appelée une seule fois au démarrage de l'application.
+    Cherche un modèle actif dans la liste et met à jour la variable globale.
+    N'est appelée que si aucun modèle n'est déjà actif.
     """
-    global active_model_url, active_model_name
+    global active_model_url
+    print("--- Aucun modèle actif. Lancement de la recherche... ---")
     
-    print("--- Recherche d'un modèle d'IA actif ---")
     for url in MODEL_ENDPOINTS:
-        model_name = url.split("/")[-1] # Extrait le nom du modèle de l'URL
+        model_name = url.split("/")[-1]
         print(f"Test du modèle : {model_name}...")
-        
         try:
-            # On envoie une requête de test simple pour voir si le modèle est accessible
-            response = requests.post(
-                url,
-                headers={"Authorization": f"Bearer {HF_API_TOKEN}"},
-                json={"inputs": "Hello"},
-                timeout=15 # On n'attend pas plus de 15 secondes
-            )
-            # Si le serveur répond sans erreur (status 200), c'est notre champion !
+            # On envoie une requête de test avec un timeout généreux.
+            response = requests.post(url, headers=headers, json={"inputs": "test"}, timeout=45)
             if response.status_code == 200:
+                print(f"SUCCÈS ! Modèle actif trouvé : {model_name}")
                 active_model_url = url
-                active_model_name = model_name
-                print(f"SUCCÈS ! Modèle actif : {active_model_name}")
-                return # On a trouvé, on arrête la recherche
-        except requests.exceptions.RequestException as e:
-            # Si le modèle ne répond pas, on passe au suivant
-            print(f"ÉCHEC du modèle {model_name}: {e}")
+                return True  # Succès, on arrête la recherche.
+        except requests.exceptions.RequestException:
+            print(f"ÉCHEC du modèle {model_name}. Essai du suivant.")
             continue
             
-    if not active_model_url:
-        print("AVERTISSEMENT : Aucun modèle d'IA n'a pu être contacté.")
+    print("AVERTISSEMENT : Aucun modèle d'IA n'a pu être contacté.")
+    return False  # Échec, aucun modèle n'a été trouvé.
 
 def get_bot_response(message, history):
     """
-    Cette fonction prend le message de l'utilisateur et renvoie la réponse de l'IA.
-    Elle utilise maintenant le modèle que nous avons trouvé au démarrage.
+    Fonction principale appelée par l'interface de chat.
     """
-    # Si aucun modèle n'a été trouvé au démarrage, on renvoie une erreur.
+    global active_model_url
+    
+    # Si aucun modèle n'est mémorisé, on en cherche un maintenant.
     if not active_model_url:
-        return "Désolé, tous les modèles d'IA sont actuellement indisponibles. Veuillez redémarrer l'application."
+        if not find_and_set_active_model():
+            return "Désolé, tous les modèles d'IA sont injoignables pour le moment. Veuillez redémarrer l'application."
 
+    # On utilise le modèle actif pour la conversation.
     payload = {"inputs": message}
-    api_response = None
     try:
-        # On utilise l'URL du modèle actif
-        api_response = requests.post(active_model_url, headers={"Authorization": f"Bearer {HF_API_TOKEN}"}, json=payload)
-        api_response.raise_for_status()
+        api_response = requests.post(active_model_url, headers=headers, json=payload)
+        api_response.raise_for_status() # Lève une erreur en cas de 4xx ou 5xx
         output = api_response.json()
         
-        bot_message = output[0].get("generated_text", "Désolé, je n'ai pas de réponse.")
-        # On nettoie la réponse pour éviter qu'elle ne répète notre message
-        if bot_message.strip().lower().startswith(message.strip().lower()):
-             bot_message = bot_message[len(message):].lstrip()
+        # On nettoie la réponse qui répète souvent la question de l'utilisateur.
+        generated_text = output[0].get("generated_text", "Désolé, je n'ai pas de réponse.")
+        if generated_text.strip().lower().startswith(message.strip().lower()):
+             bot_message = generated_text[len(message):].strip()
+        else:
+             bot_message = generated_text.strip()
         return bot_message
-
+        
     except requests.exceptions.RequestException as e:
-        print(f"--- ERREUR DE REQUÊTE API ---: {e}")
-        if api_response is not None:
-            print(f"Status Code: {api_response.status_code}, Réponse: {api_response.text}")
-        return "Le modèle d'IA semble indisponible pour le moment, veuillez réessayer."
+        print(f"Erreur durant la conversation : {e}")
+        # On réinitialise le modèle actif en cas d'erreur pour forcer une nouvelle recherche.
+        active_model_url = None
+        return "Une erreur de communication est survenue. Veuillez renvoyer votre message."
 
-# --- Lancement de l'Application ---
-
-# On lance la recherche du modèle actif AVANT de démarrer l'interface
-find_active_model()
-
-# On crée l'interface, en affichant le nom du modèle actif dans la description !
+# --- Lancement de l'Interface ---
 iface = gr.ChatInterface(
     fn=get_bot_response,
-    title="Mon Assistant IA (Auto-Réparant)",
-    description=f"Discutez avec un assistant intelligent. Modèle actuellement actif : {active_model_name}"
+    title="Mon Assistant IA (Robuste)",
+    description="Discutez avec un assistant intelligent. Le premier message peut être lent car il initialise la connexion."
 )
 
-# Remplacez "iface.launch()" par cette ligne :
+# Configuration du lancement pour être compatible avec les plateformes de déploiement comme Render.
 iface.launch(server_name="0.0.0.0", server_port=int(os.environ.get('PORT', 7860)))
+
 
