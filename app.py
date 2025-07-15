@@ -55,4 +55,4 @@ iface = gr.ChatInterface(
     description="Discutez avec un assistant basé sur le modèle Gemini 1.5 Flash de Google."
 )
 
-iface.launch()
+iface.launch(share=True) 
