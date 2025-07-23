@@ -5,7 +5,7 @@ import json
 
 # --- CONFIGURATION : GOOGLE GEMINI ---
 API_KEY = os.getenv("GOOGLE_API_KEY")
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={API_KEY}"
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key={API_KEY}"
 headers = {"Content-Type": "application/json"}
 # ---------------------------------------------
 
